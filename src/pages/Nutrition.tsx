@@ -14,6 +14,10 @@ const MEALS: { key: MealKey; label: string }[] = [
 
 const mealLabel = (m: MealKey) => MEALS.find((x) => x.key === m)!.label
 
+// Stable reference for days with no entries. Returning a fresh `[]` from the
+// zustand selector makes every render look like a state change -> infinite loop.
+const NO_ENTRIES: FoodEntry[] = []
+
 function fmtQty(q: number): string {
   const r = Math.round(q * 100) / 100
   return Number.isInteger(r) ? String(r) : String(r)
@@ -71,7 +75,7 @@ function TrashIcon() {
 
 export default function NutritionPage() {
   const [date, setDate] = useState(() => dateKey())
-  const entries = useStore((s) => s.nutrition[date] ?? [])
+  const entries = useStore((s) => s.nutrition[date] ?? NO_ENTRIES)
   const goals = useStore((s) => s.settings.goals)
   const foods = useStore((s) => s.foods)
   const logFood = useStore((s) => s.logFood)
