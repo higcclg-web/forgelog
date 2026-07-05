@@ -95,3 +95,24 @@ export interface Settings {
   restSec: number
   onboarded: boolean
 }
+
+// ---------- Weekly training plan ----------
+
+export type TrainingGoal = 'strength' | 'hypertrophy' | 'general'
+
+export type PlanDayKind = 'rest' | 'routine' | 'muscle'
+
+/** One weekday in the weekly split. */
+export interface PlanDay {
+  kind: PlanDayKind
+  label: string // e.g. "Push", "Chest & Arms", "Leg Day", "Rest"
+  routineId?: string // when kind === 'routine'
+  muscles?: MuscleGroup[] // when kind === 'muscle'
+}
+
+/** A 7-slot weekly plan. days[0] = Monday … days[6] = Sunday (matches weekStart). */
+export interface WeeklyPlan {
+  days: PlanDay[]
+  goal: TrainingGoal
+  daysPerWeek: number
+}

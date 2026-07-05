@@ -9,6 +9,7 @@ import {
   Sheet,
 } from '../components/ui'
 import { ExercisePicker } from '../components/ExercisePicker'
+import PlanTab from './Plan'
 import {
   bestE1RMInHistory,
   computePRs,
@@ -40,7 +41,7 @@ import {
   uid,
 } from '../lib/util'
 
-type SubTab = 'train' | 'routines' | 'history'
+type SubTab = 'plan' | 'train' | 'routines' | 'history'
 
 /** Built-in starter routines, shown when the user has none of their own. */
 const STARTER_TEMPLATES: { name: string; exerciseIds: string[] }[] = [
@@ -81,19 +82,21 @@ export default function WorkoutPage() {
 /* ------------------------------------------------------------------ */
 
 function BrowseView() {
-  const [tab, setTab] = useState<SubTab>('train')
+  const [tab, setTab] = useState<SubTab>('plan')
   return (
     <div className="pt-4">
       <Segmented
         value={tab}
         onChange={setTab}
         options={[
-          { value: 'train', label: 'Train' },
+          { value: 'plan', label: 'Plan' },
+          { value: 'train', label: 'Start' },
           { value: 'routines', label: 'Routines' },
           { value: 'history', label: 'History' },
         ]}
       />
       <div className="mt-5">
+        {tab === 'plan' && <PlanTab />}
         {tab === 'train' && <TrainTab />}
         {tab === 'routines' && <RoutinesTab />}
         {tab === 'history' && <HistoryTab />}

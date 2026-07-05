@@ -6,9 +6,13 @@ import type {
   Food,
   FoodEntry,
   MealKey,
+  MuscleGroup,
+  PlanDay,
   Routine,
   SetEntry,
   Settings,
+  TrainingGoal,
+  WeeklyPlan,
   Workout,
   WorkoutExercise,
 } from './types'
@@ -24,6 +28,7 @@ export interface ForgeState {
   foods: Food[]
   nutrition: Record<string, FoodEntry[]>
   bodyweight: BodyweightEntry[]
+  plan: WeeklyPlan | null
   rest: { endsAt: number | null; total: number }
 
   setSettings: (patch: Partial<Settings>) => void
@@ -58,6 +63,10 @@ export interface ForgeState {
   logBodyweight: (date: string, kg: number) => void
   deleteBodyweight: (date: string) => void
 
+  setPlan: (plan: WeeklyPlan | null) => void
+  updatePlanDay: (index: number, day: PlanDay) => void
+  clearPlan: () => void
+
   importData: (data: unknown) => string | null
   resetAll: () => void
 }
@@ -78,6 +87,7 @@ const emptyData = {
   foods: [] as Food[],
   nutrition: {} as Record<string, FoodEntry[]>,
   bodyweight: [] as BodyweightEntry[],
+  plan: null as WeeklyPlan | null,
   rest: { endsAt: null as number | null, total: 90 },
 }
 
@@ -90,6 +100,7 @@ const PERSIST_KEYS = [
   'foods',
   'nutrition',
   'bodyweight',
+  'plan',
 ] as const
 
 export const useStore = create<ForgeState>()(
@@ -335,6 +346,19 @@ export const useStore = create<ForgeState>()(
       deleteBodyweight: (date) =>
         set((s) => ({ bodyweight: s.bodyweight.filter((b) => b.date !== date) })),
 
+      setPlan: (plan) => set({ plan }),
+
+      updatePlanDay: (index, day) =>
+        set((s) => {
+          if (!s.plan || index < 0 || index > 6) return {}
+          const days = [...s.plan.days]
+          days[index] = day
+          const daysPerWeek = days.filter((d) => d.kind !== 'rest').length
+          return { plan: { ...s.plan, days, daysPerWeek } }
+        }),
+
+      clearPlan: () => set({ plan: null }),
+
       importData: (data) => {
         if (typeof data !== 'object' || data === null) return 'Invalid file.'
         const d = data as Record<string, unknown>
@@ -558,4 +582,186 @@ export function mostRecentLoggedDay(
     if (best === null || date > best) best = date
   }
   return best
+}
+
+// ---------- Weekly training plan ----------
+
+export const WEEKDAYS_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+export const WEEKDAYS_FULL = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+] as const
+
+type Session = { label: string; muscles: MuscleGroup[] }
+
+const S: Record<string, Session> = {
+  full: { label: 'Full Body', muscles: ['chest', 'back', 'legs', 'shoulders', 'arms'] },
+  upper: { label: 'Upper', muscles: ['chest', 'back', 'shoulders', 'arms'] },
+  lower: { label: 'Lower', muscles: ['legs', 'core'] },
+  push: { label: 'Push', muscles: ['chest', 'shoulders', 'arms'] },
+  pull: { label: 'Pull', muscles: ['back', 'arms'] },
+  legs: { label: 'Legs', muscles: ['legs', 'core'] },
+  chest: { label: 'Chest', muscles: ['chest'] },
+  back: { label: 'Back', muscles: ['back'] },
+  shoulders: { label: 'Shoulders', muscles: ['shoulders', 'arms'] },
+  arms: { label: 'Arms', muscles: ['arms'] },
+}
+
+/** Which weekday indexes (Mon=0) are training days, spaced for recovery. */
+const PLACEMENT: Record<number, number[]> = {
+  2: [0, 3],
+  3: [0, 2, 4],
+  4: [0, 1, 3, 4],
+  5: [0, 1, 2, 3, 4],
+  6: [0, 1, 2, 3, 4, 5],
+}
+
+/** The ordered sessions for a given volume + goal. */
+function splitFor(daysPerWeek: number, goal: TrainingGoal): Session[] {
+  const hyper = goal === 'hypertrophy'
+  switch (daysPerWeek) {
+    case 2:
+      return [S.full, S.full]
+    case 3:
+      return hyper ? [S.push, S.pull, S.legs] : [S.full, S.full, S.full]
+    case 4:
+      return [S.upper, S.lower, S.upper, S.lower]
+    case 5:
+      return hyper
+        ? [S.chest, S.back, S.legs, S.shoulders, S.arms]
+        : [S.upper, S.lower, S.push, S.pull, S.legs]
+    case 6:
+      return [S.push, S.pull, S.legs, S.push, S.pull, S.legs]
+    default:
+      return [S.full, S.full, S.full]
+  }
+}
+
+/** Today's weekday index with Monday = 0. */
+export function planTodayIndex(): number {
+  return (new Date().getDay() + 6) % 7
+}
+
+export function muscleOfExercise(exerciseId: string, custom: Exercise[]): MuscleGroup {
+  return (
+    EXERCISE_LIBRARY.find((e) => e.id === exerciseId)?.muscle ??
+    custom.find((e) => e.id === exerciseId)?.muscle ??
+    'other'
+  )
+}
+
+/**
+ * Build an optimized weekly split from a training frequency + goal. Where the
+ * user already has a matching routine, the day links to it; otherwise the day
+ * is a muscle-focus that can suggest exercises on the fly.
+ */
+export function generatePlan(
+  daysPerWeek: number,
+  goal: TrainingGoal,
+  routines: Routine[],
+): WeeklyPlan {
+  const n = Math.max(2, Math.min(6, Math.round(daysPerWeek)))
+  const sessions = splitFor(n, goal)
+  const slots = PLACEMENT[n] ?? PLACEMENT[3]
+
+  const days: PlanDay[] = Array.from({ length: 7 }, () => ({ kind: 'rest', label: 'Rest' }) as PlanDay)
+
+  const matchRoutine = (label: string): Routine | undefined => {
+    const sl = label.toLowerCase()
+    return routines.find((r) => {
+      const rn = r.name.toLowerCase()
+      return rn.includes(sl) || sl.includes(rn.replace(/day/g, '').trim())
+    })
+  }
+
+  sessions.forEach((session, i) => {
+    const slot = slots[i]
+    if (slot === undefined) return
+    const routine = matchRoutine(session.label)
+    days[slot] = routine
+      ? { kind: 'routine', label: routine.name, routineId: routine.id }
+      : { kind: 'muscle', label: session.label, muscles: session.muscles }
+  })
+
+  return { days, goal, daysPerWeek: n }
+}
+
+export interface PlanStatus {
+  sessionsPlanned: number
+  sessionsDone: number
+  muscles: { muscle: MuscleGroup; trained: boolean }[]
+}
+
+/** This week's plan adherence: sessions done vs planned, and per-muscle coverage. */
+export function weeklyPlanStatus(
+  plan: WeeklyPlan,
+  history: Workout[],
+  routines: Routine[],
+  custom: Exercise[],
+): PlanStatus {
+  const start = weekStart(new Date())
+  const weekKeys = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start)
+    d.setDate(d.getDate() + i)
+    return dateKey(d)
+  })
+  const inWeek = (ts: number) => {
+    const k = dateKey(new Date(ts))
+    return k >= weekKeys[0] && k <= weekKeys[6]
+  }
+  const trainedDays = new Set(
+    history.filter((w) => inWeek(w.startedAt)).map((w) => dateKey(new Date(w.startedAt))),
+  )
+  const todayIdx = planTodayIndex()
+
+  let sessionsPlanned = 0
+  let sessionsDone = 0
+  const planned = new Set<MuscleGroup>()
+  plan.days.forEach((d, i) => {
+    if (d.kind === 'rest') return
+    sessionsPlanned++
+    if (i <= todayIdx && trainedDays.has(weekKeys[i])) sessionsDone++
+    if (d.kind === 'muscle') d.muscles?.forEach((m) => planned.add(m))
+    else if (d.kind === 'routine') {
+      routines
+        .find((r) => r.id === d.routineId)
+        ?.exercises.forEach((e) => planned.add(muscleOfExercise(e.exerciseId, custom)))
+    }
+  })
+
+  const trainedMuscles = new Set<MuscleGroup>()
+  history.forEach((w) => {
+    if (!inWeek(w.startedAt)) return
+    w.exercises.forEach((e) => trainedMuscles.add(muscleOfExercise(e.exerciseId, custom)))
+  })
+
+  const muscles = [...planned]
+    .sort()
+    .map((m) => ({ muscle: m, trained: trainedMuscles.has(m) }))
+
+  return { sessionsPlanned, sessionsDone, muscles }
+}
+
+/** Top exercises across the target muscles (compounds first), round-robin. */
+export function suggestExercisesForMuscles(
+  muscles: MuscleGroup[],
+  count: number,
+  custom: Exercise[],
+): Exercise[] {
+  const pool = [...EXERCISE_LIBRARY, ...custom]
+  const byMuscle = muscles.map((m) => pool.filter((e) => e.muscle === m))
+  const out: Exercise[] = []
+  let i = 0
+  while (out.length < count && byMuscle.some((list) => list.length > 0) && i < 200) {
+    const list = byMuscle[i % byMuscle.length]
+    const ex = list.shift()
+    if (ex && !out.includes(ex)) out.push(ex)
+    i++
+  }
+  return out
 }

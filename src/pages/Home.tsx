@@ -9,6 +9,9 @@ import {
   activityStreak,
   weekTrainingDots,
   suggestNextRoutine,
+  planTodayIndex,
+  suggestExercisesForMuscles,
+  WEEKDAYS_FULL,
 } from '../lib/store'
 import { useCountUp } from '../lib/hooks'
 import {
@@ -74,6 +77,24 @@ export default function Home({ go }: { go: (tab: Tab) => void }) {
   const startWorkout = (routineId?: string) => {
     haptic()
     s.startWorkout(routineId)
+    go('workout')
+  }
+
+  // ---------- Today's plan ----------
+  const todayIdx = planTodayIndex()
+  const todayPlan = s.plan ? s.plan.days[todayIdx] : null
+  const startTodayPlan = () => {
+    if (!todayPlan || todayPlan.kind === 'rest') return
+    haptic()
+    if (todayPlan.kind === 'routine' && todayPlan.routineId) {
+      s.startWorkout(todayPlan.routineId)
+    } else if (todayPlan.kind === 'muscle' && todayPlan.muscles) {
+      s.startWorkout()
+      s.renameActive(todayPlan.label)
+      for (const ex of suggestExercisesForMuscles(todayPlan.muscles, 5, s.customExercises)) {
+        s.addExerciseToActive(ex.id)
+      }
+    }
     go('workout')
   }
 
@@ -238,6 +259,35 @@ export default function Home({ go }: { go: (tab: Tab) => void }) {
               Resume Workout
             </Button>
           </>
+        ) : todayPlan && todayPlan.kind !== 'rest' ? (
+          <>
+            <div className="mb-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-ember mb-0.5">
+                Today · {WEEKDAYS_FULL[todayIdx]}
+              </p>
+              <p className="text-lg font-bold text-ink truncate">{todayPlan.label}</p>
+              <p className="text-[13px] text-ink-dim mt-0.5">
+                {trainedToday
+                  ? 'Trained today 💪 — nice work'
+                  : todayPlan.kind === 'muscle' && todayPlan.muscles
+                    ? todayPlan.muscles.map((m) => m[0].toUpperCase() + m.slice(1)).join(' · ')
+                    : 'On your plan for today'}
+              </p>
+            </div>
+            <Button className="w-full" onClick={startTodayPlan}>
+              Start {todayPlan.label}
+            </Button>
+          </>
+        ) : todayPlan && todayPlan.kind === 'rest' ? (
+          <div className="text-center py-1">
+            <p className="text-[15px] font-bold text-ink">Rest day 💤</p>
+            <p className="text-[13px] text-ink-dim mt-1 mb-3">
+              Recovery is on the plan today — you can still train if you want.
+            </p>
+            <Button variant="surface" className="w-full" onClick={() => startWorkout()}>
+              Start a Workout
+            </Button>
+          </div>
         ) : suggestion ? (
           <>
             <div className="mb-3">
@@ -281,6 +331,15 @@ export default function Home({ go }: { go: (tab: Tab) => void }) {
           </div>
         )}
       </Card>
+
+      {!s.active && !s.plan && (
+        <button
+          onClick={() => go('workout')}
+          className="w-full text-center text-[13px] text-ember font-semibold mt-2.5 py-1 tap"
+        >
+          📅 Set up your weekly plan
+        </button>
+      )}
 
       {/* This week */}
       <SectionTitle>This Week</SectionTitle>
